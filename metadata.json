@@ -1,0 +1,6 @@
+{
+  "name": "AegisVPN - Personal Secure Encrypted Tunnel",
+  "description": "Private personal VPN gateway, encrypted web tunnel proxy, WireGuard profile generator, and real-time network security suite.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
