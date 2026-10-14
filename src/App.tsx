@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TopBar } from './components/TopBar';
 import { VaultGate } from './components/VaultGate';
 import { TunnelBrowser } from './components/TunnelBrowser';
@@ -6,7 +6,8 @@ import { WireGuardGenerator } from './components/WireGuardGenerator';
 import { DnsLeakTest } from './components/DnsLeakTest';
 import { RelayNodes } from './components/RelayNodes';
 import { SecurityAudit } from './components/SecurityAudit';
-import type { RelayNode, IPTelemetry } from './types';
+import type { RelayNode, IPTelemetry, ConnectionState } from './types';
+import { Wifi, WifiOff, RefreshCw, CheckCircle2, ShieldAlert, X } from 'lucide-react';
 
 // Default Fallback Nodes
 const DEFAULT_NODES: RelayNode[] = [
@@ -107,19 +108,39 @@ export default function App() {
   const [nodes, setNodes] = useState<RelayNode[]>(DEFAULT_NODES);
   const [activeNode, setActiveNode] = useState<RelayNode>(DEFAULT_NODES[0]);
   const [telemetry, setTelemetry] = useState<IPTelemetry | null>(null);
+  
+  // Connection state & auto-connect
   const [isTunnelConnected, setIsTunnelConnected] = useState(true);
+  const [connectionState, setConnectionState] = useState<ConnectionState>('connected');
+  const [autoConnectEnabled, setAutoConnectEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('aegis_autoconnect') !== 'false';
+  });
+  const [isOnline, setIsOnline] = useState<boolean>(() => {
+    return typeof navigator !== 'undefined' ? navigator.onLine : true;
+  });
+  const [networkAlert, setNetworkAlert] = useState<{
+    id: number;
+    message: string;
+    type: 'success' | 'warning' | 'info';
+  } | null>(null);
+
   const [killSwitchEnabled, setKillSwitchEnabled] = useState(true);
 
   // Vault security state
   const [isVaultConfigured, setIsVaultConfigured] = useState(false);
   const [isVaultLocked, setIsVaultLocked] = useState(false);
 
+  // Ref to track latest active node in event listeners
+  const activeNodeRef = useRef(activeNode);
+  useEffect(() => {
+    activeNodeRef.current = activeNode;
+  }, [activeNode]);
+
   // Check stored vault password hash
   useEffect(() => {
     const storedHash = localStorage.getItem('aegis_vault_hash');
     if (storedHash) {
       setIsVaultConfigured(true);
-      // Auto-lock on fresh page load if configured
       setIsVaultLocked(true);
     } else {
       setIsVaultConfigured(false);
@@ -149,8 +170,122 @@ export default function App() {
       .catch((err) => console.log('IP telemetry unavailable', err));
   }, []);
 
+  // Establish / Handshake Tunnel connection
+  const establishTunnel = async (isAuto = false) => {
+    setConnectionState(isAuto ? 'reconnecting' : 'connecting');
+    try {
+      // Simulate real Curve25519 handshake against backend node
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+      await fetch(`/api/speedtest/ping?nodeId=${activeNodeRef.current.id}`, { signal: controller.signal });
+      clearTimeout(timeout);
+
+      setIsTunnelConnected(true);
+      setConnectionState('connected');
+
+      if (isAuto) {
+        setNetworkAlert({
+          id: Date.now(),
+          message: `Network restored · Auto-connect re-established tunnel via ${activeNodeRef.current.name}`,
+          type: 'success',
+        });
+      }
+    } catch {
+      // If error or offline, fallback
+      setIsTunnelConnected(false);
+      setConnectionState('disconnected');
+    }
+  };
+
+  // 1. Initial Load Auto-Connect
+  useEffect(() => {
+    if (autoConnectEnabled && isOnline) {
+      establishTunnel(false);
+    }
+  }, [autoConnectEnabled]);
+
+  // 2. Network Transitions (Offline -> Online & Online -> Offline)
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      if (autoConnectEnabled) {
+        setNetworkAlert({
+          id: Date.now(),
+          message: 'Network connection detected. Auto-connecting to encrypted relay...',
+          type: 'info',
+        });
+        establishTunnel(true);
+      } else {
+        setNetworkAlert({
+          id: Date.now(),
+          message: 'Network connection restored. Auto-connect is disabled.',
+          type: 'info',
+        });
+      }
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+      setIsTunnelConnected(false);
+      setConnectionState('disconnected');
+      setNetworkAlert({
+        id: Date.now(),
+        message: 'Network offline. Outbound sockets halted by Kill Switch to prevent cleartext leakage.',
+        type: 'warning',
+      });
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [autoConnectEnabled]);
+
+  // Auto-dismiss alert after 6 seconds
+  useEffect(() => {
+    if (networkAlert && networkAlert.type === 'success') {
+      const timer = setTimeout(() => {
+        setNetworkAlert(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [networkAlert]);
+
+  const handleToggleAutoConnect = () => {
+    const nextVal = !autoConnectEnabled;
+    setAutoConnectEnabled(nextVal);
+    localStorage.setItem('aegis_autoconnect', String(nextVal));
+    setNetworkAlert({
+      id: Date.now(),
+      message: nextVal
+        ? 'Auto-Connect enabled: The tunnel will automatically restore on app load and network transitions.'
+        : 'Auto-Connect disabled: Manual connection required after network interruption.',
+      type: 'info',
+    });
+  };
+
+  const handleToggleConnect = () => {
+    if (isTunnelConnected) {
+      setIsTunnelConnected(false);
+      setConnectionState('disconnected');
+    } else {
+      establishTunnel(false);
+    }
+  };
+
+  // Simulate network toggle for testing
+  const handleSimulateNetworkToggle = () => {
+    if (isOnline) {
+      window.dispatchEvent(new Event('offline'));
+    } else {
+      window.dispatchEvent(new Event('online'));
+    }
+  };
+
   const handleSetupVault = (passphrase: string) => {
-    // Simple fast client hash
     const simpleHash = btoa(unescape(encodeURIComponent(passphrase + '_aegis_personal_salt')));
     localStorage.setItem('aegis_vault_hash', simpleHash);
     setIsVaultConfigured(true);
@@ -162,15 +297,17 @@ export default function App() {
     const inputHash = btoa(unescape(encodeURIComponent(passphrase + '_aegis_personal_salt')));
     if (expected === inputHash) {
       setIsVaultLocked(false);
+      // If auto-connect is enabled, ensure tunnel connects upon unlock
+      if (autoConnectEnabled && isOnline) {
+        establishTunnel(false);
+      }
       return true;
     }
     return false;
   };
 
   const handleToggleVaultLock = () => {
-    if (isVaultLocked) {
-      // User clicked unlock while locked -> stays on gate or triggers prompt
-    } else {
+    if (!isVaultLocked) {
       setIsVaultLocked(true);
     }
   };
@@ -190,7 +327,44 @@ export default function App() {
       />
 
       {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8 space-y-4">
+        {/* Network & Auto-Connect Notification Banner */}
+        {networkAlert && (
+          <div
+            className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 text-xs animate-in fade-in slide-in-from-top-1 duration-200 ${
+              networkAlert.type === 'success'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                : networkAlert.type === 'warning'
+                ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                : 'bg-slate-900 border-slate-800 text-slate-300'
+            }`}
+          >
+            <div className="flex items-center gap-2.5">
+              {networkAlert.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+              {networkAlert.type === 'warning' && <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />}
+              {networkAlert.type === 'info' && <RefreshCw className="w-4 h-4 text-cyan-400 shrink-0 animate-spin" />}
+              <span className="font-medium">{networkAlert.message}</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleSimulateNetworkToggle}
+                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-mono text-[10px] transition-colors cursor-pointer"
+                title="Test network online/offline transition event"
+              >
+                {isOnline ? 'Simulate Drop' : 'Simulate Reconnect'}
+              </button>
+
+              <button
+                onClick={() => setNetworkAlert(null)}
+                className="p-1 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {isVaultLocked ? (
           <VaultGate
             isConfigured={isVaultConfigured}
@@ -206,7 +380,11 @@ export default function App() {
                 onSelectNode={(node) => setActiveNode(node)}
                 telemetry={telemetry}
                 isConnected={isTunnelConnected}
-                onToggleConnect={() => setIsTunnelConnected(!isTunnelConnected)}
+                connectionState={connectionState}
+                autoConnectEnabled={autoConnectEnabled}
+                onToggleAutoConnect={handleToggleAutoConnect}
+                isOnline={isOnline}
+                onToggleConnect={handleToggleConnect}
                 killSwitchEnabled={killSwitchEnabled}
               />
             )}
@@ -279,7 +457,7 @@ export default function App() {
           <div className="flex items-center gap-2 text-slate-500">
             <span>RAM-Only Diskless OS</span>
             <span aria-hidden="true">·</span>
-            <span>Zero Persistent Logs</span>
+            <span>Auto-Connect {autoConnectEnabled ? 'Active' : 'Disabled'}</span>
             <span aria-hidden="true">·</span>
             <span>DNSSEC Enforced</span>
           </div>

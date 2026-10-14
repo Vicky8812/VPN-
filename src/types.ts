@@ -52,6 +52,8 @@ export interface DNSQueryResult {
   }>;
 }
 
+export type ConnectionState = 'connected' | 'connecting' | 'disconnected' | 'reconnecting';
+
 export interface SpeedTestResult {
   ping: number;
   jitter: number;

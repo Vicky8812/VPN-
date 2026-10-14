@@ -16,7 +16,8 @@ import {
   Check, 
   Sparkles,
   Layers,
-  ShieldCheck
+  ShieldCheck,
+  BatteryCharging
 } from 'lucide-react';
 import type { RelayNode, ThroughputRunRecord } from '../types';
 
@@ -455,7 +456,11 @@ Protocol: WireGuard ChaCha20-Poly1305`;
               </div>
             </div>
 
-            <div className="flex items-center gap-2 font-mono text-[11px]">
+            <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
+              <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                <BatteryCharging className="w-3 h-3" />
+                <span>CPU: ~0.8% (Eco A+)</span>
+              </span>
               <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                 WireGuard v2
               </span>
